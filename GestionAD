@@ -1,0 +1,493 @@
+# ===================================================================
+# ==          ASSISTANT INTERACTIF DE GESTION ACTIVE DIRECTORY     ==
+# ===================================================================
+
+
+# La boucle principale qui fait tourner le menu
+while ($true) {
+    Clear-Host 
+    
+    Write-Host "--- Menu Principal - Assistant Active Directory ---`n" -ForegroundColor Cyan
+    Write-Host "--- Gestion des Utilisateurs ---`n"
+    Write-Host "  1) Créer un nouvel utilisateur"
+    Write-Host "  2) Supprimer un utilisateur`n"
+    Write-Host "--- Gestion des Groupes ---`n"
+    Write-Host "  3) Créer un nouveau groupe"
+    Write-Host "  4) Supprimer un groupe"
+    Write-Host "  5) Ajouter un utilisateur à un groupe`n"
+    Write-Host "--- Gestion des Unités d'Organisation ---`n"
+    Write-Host "  6) Créer une nouvelle OU (avec liaison GPO)"
+    Write-Host "  7) Supprimer une OU (Action dangereuse !)`n"
+    Write-Host "--- Evolution du script ---`n"
+    Write-Host "  8) Vérifier l'état des services critiques"
+    Write-Host "  9) Lister les membres d'un groupe sensible`n"
+    Write-Host "--------------------------------------------"
+    Write-Host "  Q) Quitter le script"
+    Write-Host "--------------------------------------------"
+
+    # Read-Host met le script en pause et attend que l'utilisateur tape quelque chose et appuie sur Entrée.
+    # Ce qui est tapé est stocké dans la variable '$choixMenu'.
+    $choixMenu = Read-Host "Votre choix"
+
+    # --- Gestion des Utilisateurs ---
+    if ($choixMenu -eq '1') {
+        Write-Host "`n--- Création d'un nouvel utilisateur ---" -ForegroundColor Green
+        # On collecte les informations nécessaires avec une série de questions.
+        $prenom = Read-Host "Prénom de l'utilisateur"
+        $nom = Read-Host "Nom de l'utilisateur"
+        $cheminOU = Read-Host "Chemin de l'OU (ex: OU=Technique,DC=sete,DC=local)"
+       
+        # On génère automatiquement le nom de connexion (SamAccountName) selon un format standard (p.nom).
+        # "$(...)" est une sous-expression. Elle permet d'exécuter du code à l'intérieur d'une chaîne de caractères.
+        # .Substring(0,1) prend la première lettre du prénom. .ToLower() convertit tout en minuscules.
+        $nomConnexion = "$($prenom.Substring(0,1).ToLower()).$($nom.ToLower())"
+
+        # Le paramètre '-AsSecureString' est un élément de sécurité. Le mot de passe n'apparaît pas
+        # en clair à l'écran et n'est pas stocké en clair dans la mémoire du script.
+        $motDePasse = Read-Host -AsSecureString "Entrez le mot de passe temporaire pour '$nomConnexion'"
+
+        # Avant de créer l'utilisateur, on vérifie s'il n'existe pas déjà.
+        if (Get-ADUser -Filter { SamAccountName -eq $nomConnexion }) {
+            Write-Host "ERREUR : Un utilisateur avec le nom de connexion '$nomConnexion' existe déjà." -ForegroundColor Red
+        }
+        else {
+            # Si l'utilisateur n'existe pas, on le crée.
+            # -ChangePasswordAtLogon $true force l'utilisateur à changer ce mot de passe temporaire à sa première connexion.
+            New-ADUser -Name "$prenom $nom" -GivenName $prenom -Surname $nom -SamAccountName $nomConnexion -UserPrincipalName "$nomConnexion@sete.local" -Path $cheminOU -AccountPassword $motDePasse -Enabled $true -ChangePasswordAtLogon $true
+            Write-Host "SUCCÈS : L'utilisateur '$nomConnexion' a été créé." -ForegroundColor Green
+        }
+    }
+    elseif ($choixMenu -eq '2') {
+         Write-Host "`n--- Suppression d'un Utilisateur ---" -ForegroundColor White
+            
+            # La logique du un bloc 'try' permet, si une commande plante (ex: pas les droits),
+            # de continuer l'éxecution du script en passant directement au bloc 'catch'.
+            try {
+
+                # On récupère TOUS les utilisateurs et on les trie par nom pour un affichage propre.
+                $userList = Get-ADUser -Filter * | Sort-Object Name
+
+                # Si la commande ne retourne aucun utilisateur, on informe l'utilisateur et on arrête cette section.
+                # 'continue' fait sauter le reste du code de la boucle et retourne directement au début (l'affichage du menu).
+                if ($userList.Count -eq 0) {
+                    Write-Host "Il n'y a aucun utilisateur à afficher." -ForegroundColor Yellow
+                    continue
+                }
+
+                # On affiche la liste numérotée des utilisateurs.
+                Write-Host "Liste des utilisateurs disponibles :" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $userList.Count; $i++) {
+
+                    # L'opérateur de format '-f' est très pratique pour créer des chaînes de caractères complexes.
+                    # {0} est remplacé par le premier argument ($i + 1), {1} par le second, etc.
+                    Write-Host ("{0}. {1} ({2})" -f ($i + 1), $userList[$i].Name, $userList[$i].SamAccountName)
+                }
+
+                $choixNum = Read-Host "`nEntrez le numéro de l'utilisateur à supprimer (laissez vide pour annuler)"
+
+                # Permet de vérifier si l'utilisateur n'a rien tapé.
+                if ([string]::IsNullOrWhiteSpace($choixNum)) { continue }
+
+
+                # 1. [int]::TryParse(...) : Essaie de convertir l'entrée en nombre.
+                # 2. $num -gt 0 : Vérifie que le nombre n'est pas 0 ou négatif.
+                # 3. $num -le $userList.Count : Vérifie que le nombre est bien dans la liste.
+                if ([int]::TryParse($choixNum, [ref]$num) -and $num -gt 0 -and $num -le $userList.Count) {
+
+                    # Si la validation est OK, on récupère l'utilisateur choisi dans la liste.
+                    # On fait '$num - 1' car les listes (arrays) en PowerShell commencent à l'index 0.
+                    $userToDelete = $userList[$num - 1]
+
+                     # On demande une double confirmation pour des mesures de sécurité.
+                    $confirmation = Read-Host "Êtes-vous SÛR de vouloir supprimer définitivement l'utilisateur '$($userToDelete.Name)' ? (O/N)"
+                    if ($confirmation -eq 'O') {
+                        Remove-ADUser -Identity $userToDelete -Confirm:$false # On a déjà notre propre confirmation
+                        Write-Host "SUCCÈS : L'utilisateur '$($userToDelete.Name)' a été supprimé." -ForegroundColor Green
+                    } else {
+                        Write-Host "Opération annulée." -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "ERREUR : Sélection invalide." -ForegroundColor Red
+                }
+            } catch {
+                # Ce bloc s'exécute si une erreur se produit dans le bloc 'try'.
+                Write-Host "ERREUR : Impossible de lister ou supprimer les utilisateurs. Vérifiez vos permissions." -ForegroundColor Red
+            }
+        }
+
+    # --- Gestion des Groupes ---
+    elseif ($choixMenu -eq '3') {
+        Write-Host "`n--- Création d'un nouveau groupe ---" -ForegroundColor Green
+            $nomGroupe = Read-Host "Nom du nouveau groupe (ex: GRP_Comptabilite)"
+            $cheminOU = Read-Host "Chemin de l'OU où créer le groupe (ex: OU=Administratif,DC=sete,DC=local)"
+
+            # Comme pour les utilisateurs, on vérifie si le groupe existe déjà.
+            if (Get-ADGroup -Filter { Name -eq $nomGroupe }) {
+                Write-Host "ERREUR : Le groupe '$nomGroupe' existe déjà." -ForegroundColor Red
+            }
+            else {
+                # Création du groupe. Global est le scope le plus courant.
+                New-ADGroup -Name $nomGroupe -GroupScope Global -Path $cheminOU
+                Write-Host "SUCCÈS : Le groupe '$nomGroupe' a été créé." -ForegroundColor Green
+            }
+        }
+    elseif ($choixMenu -eq '4') {
+        Write-Host "`n--- Suppression d'un Groupe ---" -ForegroundColor White
+
+            # La logique est quasi identique à la suppression d'utilisateur
+            try {
+                $groupList = Get-ADGroup -Filter * | Sort-Object Name
+                if ($groupList.Count -eq 0) {
+                    Write-Host "Il n'y a aucun groupe à afficher." -ForegroundColor Yellow
+                    continue
+                }
+
+                Write-Host "Liste des groupes disponibles :" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $groupList.Count; $i++) {
+                    Write-Host ("{0}. {1}" -f ($i + 1), $groupList[$i].Name)
+                }
+
+                $choixNum = Read-Host "`nEntrez le numéro du groupe à supprimer (laissez vide pour annuler)"
+                if ([string]::IsNullOrWhiteSpace($choixNum)) { continue }
+
+                # On réutilise la même méthode de validation fiable
+                if ([int]::TryParse($choixNum, [ref]$num) -and $num -gt 0 -and $num -le $groupList.Count) {
+                    $groupToDelete = $groupList[$num - 1]
+                    $confirmation = Read-Host "Êtes-vous SÛR de vouloir supprimer définitivement le groupe '$($groupToDelete.Name)' ? (O/N)"
+                    if ($confirmation -eq 'O') {
+                        Remove-ADGroup -Identity $groupToDelete -Confirm:$false
+                        Write-Host "SUCCÈS : Le groupe '$($groupToDelete.Name)' a été supprimé." -ForegroundColor Green
+                    } else {
+                        Write-Host "Opération annulée." -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "ERREUR : Sélection invalide." -ForegroundColor Red
+                }
+            } catch {
+                Write-Host "ERREUR : Impossible de lister ou supprimer les groupes. Vérifiez vos permissions." -ForegroundColor Red
+            }
+        }
+    
+    
+    elseif ($choixMenu -eq '5') {
+         try {
+        # On Sélectionne le groupe cible
+        $groupList = Get-ADGroup -Filter * | Sort-Object Name
+        if ($groupList.Count -eq 0) {
+            Write-Host "Il n'y a aucun groupe disponible dans l'Active Directory." -ForegroundColor Yellow
+            continue # Retourne au menu principal
+        }
+
+        Write-Host "`nÀ quel groupe souhaitez-vous ajouter un utilisateur ?" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $groupList.Count; $i++) {
+            Write-Host ("{0}. {1}" -f ($i + 1), $groupList[$i].Name)
+        }
+
+        # Ligne importante, elle corrige l'erreur "variable inexistante". On déclare la variable
+        # avant de l'utiliser avec '[ref]' dans 'TryParse'.
+        $numGroupe = 0
+        $choixGroupeNum = Read-Host "`nEntrez le numéro du groupe (laissez vide pour annuler)"
+        if ([string]::IsNullOrWhiteSpace($choixGroupeNum)) { continue }
+
+        # On vérifie que le choix est un nombre valide dans la liste
+        if ([int]::TryParse($choixGroupeNum, [ref]$numGroupe) -and $numGroupe -gt 0 -and $numGroupe -le $groupList.Count) {
+            # Le choix est valide, on stocke le groupe sélectionné
+            $groupToModify = $groupList[$numGroupe - 1]
+
+            # On sélectionne l'utilisateur à ajouter
+            $userList = Get-ADUser -Filter * | Sort-Object Name
+            if ($userList.Count -eq 0) {
+                Write-Host "Il n'y a aucun utilisateur disponible dans l'Active Directory." -ForegroundColor Yellow
+                continue # Retourne au menu principal
+            }
+
+            Write-Host "`nQuel utilisateur souhaitez-vous ajouter au groupe '$($groupToModify.Name)' ?" -ForegroundColor Cyan
+            for ($i = 0; $i -lt $userList.Count; $i++) {
+                # On affiche le nom complet et le nom de connexion pour limiter les erreurs
+                Write-Host ("{0}. {1} ({2})" -f ($i + 1), $userList[$i].Name, $userList[$i].SamAccountName)
+            }
+            
+            $numUser = 0
+            $choixUserNum = Read-Host "`nEntrez le numéro de l'utilisateur (laissez vide pour annuler)"
+            if ([string]::IsNullOrWhiteSpace($choixUserNum)) { continue }
+            
+            # On vérifie que le choix est un nombre valide dans la liste
+            if ([int]::TryParse($choixUserNum, [ref]$numUser) -and $numUser -gt 0 -and $numUser -le $userList.Count) {
+                # Le choix est valide, on stocke l'utilisateur sélectionné
+                $userToAdd = $userList[$numUser - 1]
+
+                # On ajoute l'user au groupe 
+                Write-Host "`nAjout de '$($userToAdd.Name)' au groupe '$($groupToModify.Name)'..." -ForegroundColor Yellow
+                Add-ADGroupMember -Identity $groupToModify -Members $userToAdd
+                Write-Host "SUCCÈS : L'utilisateur a bien été ajouté au groupe." -ForegroundColor Green
+
+            } else {
+                Write-Host "ERREUR : La sélection de l'utilisateur est invalide." -ForegroundColor Red
+            }
+
+        } else {
+            Write-Host "ERREUR : La sélection du groupe est invalide." -ForegroundColor Red
+        }
+
+    } catch {
+        # Ce bloc 'catch' intercepte toute erreur qui pourrait survenir (ex: droits insuffisants)
+        Write-Host "ERREUR : Une erreur inattendue est survenue. Vérifiez vos permissions." -ForegroundColor Red
+        Write-Host "Message technique : $($_.Exception.Message)" -ForegroundColor DarkGray # Donne un indice sur l'erreur
+    }
+}
+
+    # --- Gestion des OUs ---
+    elseif ($choixMenu -eq '6') {
+       Write-Host "`n--- Création d'une nouvelle Unité d'Organisation (OU) ---" -ForegroundColor Green
+            $nomNouvelleOU = Read-Host "Nom de la nouvelle OU (ex: Marketing)"
+            Write-Host "Où voulez-vous créer cette OU ? Laissez vide pour la créer à la racine du domaine." -ForegroundColor Yellow
+            $cheminParentOU = Read-Host "Chemin de l'OU parente (ex: OU=Technique,DC=sete,DC=local)"
+
+            # Si l'utilisateur n'a rien tapé pour le chemin parent on récupère dynamiquement le "DistinguishedName" du domaine actuel pour l'utiliser comme racine.
+            if ([string]::IsNullOrEmpty($cheminParentOU)) {
+
+                # Ca rend le script adaptable à n'importe quel domaine.
+                $cheminParentOU = (Get-ADDomain).DistinguishedName 
+            }
+            try {
+                # On crée l'OU. -ProtectedFromAccidentalDeletion $true est une sécurité qui empêche
+                # la suppression de l'OU par un simple clic droit dans la console "Utilisateurs et ordinateurs AD".
+                New-ADOrganizationalUnit -Name $nomNouvelleOU -Path $cheminParentOU -ProtectedFromAccidentalDeletion $true -ErrorAction Stop
+                Write-Host "SUCCÈS : L'OU '$nomNouvelleOU' a été créée." -ForegroundColor Green
+           
+           # On propose une action complémentaire : lier des GPO.
+           $confirmerLiaison = Read-Host "Voulez-vous lier des GPOs à cette nouvelle OU ? (O/N)"
+                if ($confirmerLiaison -eq 'O') {
+
+                    # === 1. Récupération dynamique des GPOs ===
+                    try {
+                    # On récupère toutes les GPO du domaine et on les trie.
+                        $allGPOs = Get-GPO -All | Sort-Object DisplayName
+                        Write-Host "`nVoici la liste de toutes les GPOs disponibles dans le domaine :" -ForegroundColor Cyan
+                    } catch {
+                        Write-Host "ERREUR : Impossible de récupérer la liste des GPOs." -ForegroundColor Red
+                        continue # On retourne au menu principal
+                    }
+
+                    # === 2. Affichage du menu de sélection ===
+                    for ($i = 0; $i -lt $allGPOs.Count; $i++) {
+                        Write-Host ("{0}. {1}" -f ($i + 1), $allGPOs[$i].DisplayName)
+                    }
+
+                    # === 3. Demande de sélection à l'utilisateur ===
+                    $choixGPOs = Read-Host "`nEntrez les numéros des GPOs à lier, séparés par une virgule (ex: 1,5,8). Laissez vide pour ne rien faire."
+
+                    # === 4. Traitement et liaison des GPOs choisies ===
+                    if (-not [string]::IsNullOrWhiteSpace($choixGPOs)) {
+                       
+                        # .Split(',') transforme la chaîne "1,5,8" en une liste ("1", "5", "8").
+                        $numerosChoisis = $choixGPOs.Split(',')
+
+
+                        # On parcourt chaque numéro entré par l'utilisateur.
+                        foreach ($numeroStr in $numerosChoisis) {
+                            # Validation que le choix est bien un nombre. '.Trim()' enlève les espaces superflus.
+                            if ([int]::TryParse($numeroStr.Trim(), [ref]$numeroChoisi)) {
+                              
+                                # Validation que le numéro est dans la liste (index = numéro - 1)
+                                if ($numeroChoisi -gt 0 -and $numeroChoisi -le $allGPOs.Count) {
+                                    # Le numéro est valide, on récupère la GPO correspondante.
+                                    $indexArray = $numeroChoisi - 1
+                                    # On calcule le chemin de la nouvelle OU pour la liaison.
+                                    $gpoAIndexer = $allGPOs[$indexArray]
+
+                                    try {
+                                        # On crée la liaison entre la GPO et l'OU.
+                                        New-GPLink -Name $gpoAIndexer.DisplayName -Target $cheminNouvelleOU -ErrorAction Stop
+                                        Write-Host " > SUCCÈS : La GPO '$($gpoAIndexer.DisplayName)' a été liée." -ForegroundColor Green
+                                    } catch {
+                                        Write-Host " > ERREUR lors de la liaison de la GPO '$($gpoAIndexer.DisplayName)'." -ForegroundColor Red
+                                    }
+                                } else {
+                                    Write-Host " > AVERTISSEMENT : Le numéro '$numeroChoisi' n'est pas dans la liste et a été ignoré." -ForegroundColor Yellow
+                                }
+                            } else {
+                                Write-Host " > AVERTISSEMENT : L'entrée '$numeroStr' n'est pas un numéro valide et a été ignorée." -ForegroundColor Yellow
+                            }
+                        }
+                    }
+                }
+           
+           
+           
+            }
+            catch {
+                Write-Host "ERREUR : Impossible de créer l'OU." -ForegroundColor Red
+            }
+        }
+    elseif ($choixMenu -eq '7') {
+         Write-Host "`n--- Suppression d'une Unité d'Organisationnelle (OU) ---" -ForegroundColor White
+            try {
+                # On ne récupère que les objets de type 'OrganizationalUnit'.
+                $ouList = Get-ADOrganizationalUnit -Filter * | Sort-Object Name
+                 if ($ouList.Count -eq 0) {
+                    Write-Host "Il n'y a aucune OU à afficher (hors conteneurs par défaut)." -ForegroundColor Yellow
+                    continue
+                }
+
+                Write-Host "Liste des OUs disponibles :" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $ouList.Count; $i++) {
+                    Write-Host ("{0}. {1}" -f ($i + 1), $ouList[$i].Name)
+                }
+
+                $choixNum = Read-Host "`nEntrez le numéro de l'OU à supprimer (laissez vide pour annuler)"
+                if ([string]::IsNullOrWhiteSpace($choixNum)) { continue }
+
+                # Initialisation de la variable
+                $num = 0 
+                if ([int]::TryParse($choixNum, [ref]$num) -and $num -gt 0 -and $num -le $ouList.Count) {
+                    $ouToDelete = $ouList[$num - 1]
+                    
+                    # Note : La suppression d'une OU est récursive et supprime TOUT son contenu. D'où la confirmation en majuscules.
+                    $confirmation = Read-Host "Êtes-vous SÛR de vouloir supprimer l'OU '$($ouToDelete.Name)' ET TOUT SON CONTENU ? (O/N)"
+                    if ($confirmation -eq 'O') {
+                        # ÉTAPE 1 : On doit d'abord désactiver la protection contre la suppression accidentelle.
+                        Set-ADObject -Identity $ouToDelete.DistinguishedName -ProtectedFromAccidentalDeletion $false
+                        # ÉTAPE 2 : Une fois la protection enlevée, on peut supprimer l'OU.
+                        Remove-ADOrganizationalUnit -Identity $ouToDelete.DistinguishedName -Recursive -Confirm:$false
+                        Write-Host "SUCCÈS : L'OU '$($ouToDelete.Name)' et son contenu ont été supprimés." -ForegroundColor Green
+                    } else {
+                        Write-Host "Opération annulée." -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "ERREUR : Sélection invalide." -ForegroundColor Red
+                }
+            } catch {
+                Write-Host "ERREUR : Une erreur inattendue est survenue lors de la tentative de suppression." -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Gray
+            }
+        }
+
+    elseif ($choixMenu -eq '8') {
+        Write-Host "`n--- Surveillance des Services Critiques ---" -ForegroundColor White
+            
+            # Définissez ici les services que vous voulez surveiller.
+            # Utilisez le "Nom du service", pas le "Nom d'affichage".
+            # Array "@" rend le script facile à modifier : il suffit d'ajouter ou de retirer un nom de la liste.
+            $servicesCritiques = @(
+                "Netlogon",    # Essentiel pour les connexions au domaine
+                "Dns",         # Service Client DNS ou Serveur DNS
+                "Spooler",     # Spouleur d'impression, souvent source de problèmes
+                "w32time",     # Service de temps Windows, crucial pour l'authentification Kerberos
+                "RpcSs"        # Appel de procédure distante (RPC), fondamental pour Windows
+            )
+
+            Write-Host "`nÉtat des services sur le serveur où ce script est exécuté :" -ForegroundColor Cyan
+            
+
+            # On boucle sur chaque service de la liste.
+            foreach ($service in $servicesCritiques) {
+                try {
+                    # On récupère l'objet du service. -ErrorAction Stop force une erreur si le service n'existe pas.
+                    $etatService = Get-Service -Name $service -ErrorAction Stop
+                    
+                    # On stocke les propriétés qui nous intéressent dans des variables.
+                    $nomAffichage = $etatService.DisplayName
+                    $statut = $etatService.Status
+
+                    # On choisit une couleur en fonction du statut
+                    if ($statut -eq 'Running') {
+                        $couleur = "Green"
+                    } elseif ($statut -eq 'Stopped') {
+                        $couleur = "Red"
+                    } else {
+                        $couleur = "Yellow" # Pour les états comme 'Paused' ou 'Starting'
+                    }
+                    
+                    # On affiche le résultat de manière formatée et lisible
+                    # {0,-40} signifie : prend le premier argument, et réserve-lui 40 caractères, alignés à gauche.
+                    Write-Host ("- {0,-40} : {1}" -f $nomAffichage, $statut) -ForegroundColor $couleur
+
+                } catch {
+                    # Si Get-Service ne trouve pas le service, il lèvera une erreur.
+                    # On l'attrape pour ne pas faire planter le script.
+                    Write-Host ("- Service '{0}' introuvable sur cette machine." -f $service) -ForegroundColor Gray
+                }
+            }
+   }
+    elseif ($choixMenu -eq '9') {
+         try {
+        Write-Host "`n--- Liste des membres d'un groupe sensible ---" -ForegroundColor Yellow
+
+        # On liste tous les groupes de sécurité disponibles pour l'utilisateur.
+        Write-Host "`nAffichage de tous les groupes de sécurité disponibles..." -ForegroundColor Cyan
+        
+        # On cherche tous les groupes de sécurité, on ne garde que leur nom, et on les trie par ordre alphabétique.
+        # Le 'pipe' (|) envoie le résultat d'une commande à la suivante.
+        # Select-Object Name ne garde que la colonne "Name".
+        # Format-Table -AutoSize ajuste la largeur de la colonne au contenu.
+        Get-ADGroup -Filter 'GroupCategory -eq "Security"' -ErrorAction Stop | Select-Object Name | Sort-Object Name| Format-Table -AutoSize
+        
+        Write-Host "--------------------------------------------------" -ForegroundColor Cyan
+
+        # On demande à l'utilisateur de faire son choix.
+        $nomGroupe = Read-Host "`nVeuillez entrer le nom exact d'un groupe de la liste ci-dessus"
+
+        # On vérifie que l'utilisateur a bien tapé quelque chose.
+        if ([string]::IsNullOrWhiteSpace($nomGroupe)) {
+            Write-Host "Aucun nom de groupe n'a été entré. Retour au menu." -ForegroundColor Red
+            Read-Host "Appuyez sur Entrée pour continuer..."
+            return # 'return' arrête la fonction ici et renvoie au menu.
+        }
+
+        # ÉTAPE 3 : On exécute la logique que nous avions déjà écrite.
+        Write-Host "`nRecherche des membres pour le groupe '$nomGroupe'..." -ForegroundColor Cyan
+        
+        # On utilise un try/catch spécifique pour cette commande car elle peut échouer si
+        # l'utilisateur se trompe dans le nom du groupe.
+        try {
+            $membres = Get-ADGroupMember -Identity $nomGroupe -ErrorAction Stop
+            
+            # $null est la valeur "rien". On vérifie si la commande a retourné quelque chose.
+            if ($null -ne $membres) {
+                Write-Host "Membres du groupe '$nomGroupe':" -ForegroundColor Green
+
+                # On affiche les membres dans un tableau.
+                $membres | Format-Table -Property Name, SamAccountName, objectClass -AutoSize
+            } else {
+               
+                # Si la commande réussit mais ne retourne rien, c'est que le groupe est vide.
+                Write-Host "Le groupe '$nomGroupe' existe mais ne contient aucun membre." -ForegroundColor Yellow
+            }
+        } catch {
+            # Cette erreur se déclenche si Get-ADGroupMember échoue (ex: nom du groupe incorrect).
+            Write-Host "Erreur : Impossible de trouver le groupe '$nomGroupe'. Vérifiez le nom et réessayez." -ForegroundColor Red
+            # $_ est une variable spéciale qui contient la dernière erreur.
+            Write-Host "Détail technique :" $_.Exception.Message -ForegroundColor Red
+        }
+
+    } catch {
+        # Cette erreur plus large se déclenche si la toute première commande (Get-ADGroup) échoue.
+        # Par exemple, si le module Active Directory n'est pas du tout disponible.
+        Write-Host "ERREUR CRITIQUE : Impossible de contacter l'Active Directory." -ForegroundColor Red
+        Write-Host "Vérifiez que le module 'ActiveDirectory' pour PowerShell est installé." -ForegroundColor Red
+    }
+
+            }
+
+
+
+    # --- Quitter ---
+    elseif ($choixMenu -eq 'Q') {
+        Write-Host "Fermeture du script. Au revoir !" -ForegroundColor Yellow
+        break # Cette commande arrête la boucle 'while ($true)'
+    }
+
+    # Le 'else' s'exécute si aucune des conditions 'if' ou 'elseif' précédentes n'est vraie.
+    # C'est une sécurité pour gérer les entrées incorrectes de l'utilisateur.
+    else {
+        Write-Host "`nChoix non valide. Veuillez utiliser les numéros du menu." -ForegroundColor Red
+    }
+
+    # On demande à l'utilisateur d'appuyer sur Entrée pour continuer et réafficher le menu
+    Write-Host "`nAppuyez sur Entrée pour retourner au menu principal..."
+    Read-Host | Out-Null
+}
+
+# Ce message ne s'affichera qu'après être sorti de la boucle (en tapant 'Q')
+Write-Host "Script terminé."
