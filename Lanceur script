@@ -1,0 +1,51 @@
+# ===================================================================
+#               Boîte à Outils de l'Administrateur
+#                 --- Lanceur Principal ---
+# ===================================================================
+
+# Configuration des chemins vers les outils
+# Commande qui permet de lancer les scripts depuis n'importe quel dossier, tant que les 3 se trouvent dans le même dossier
+$ScriptPathAD = Join-Path -Path $PSScriptRoot -ChildPath "GestionAd.ps1"
+$ScriptPathSupervision = Join-Path -Path $PSScriptRoot -ChildPath  "Outils supervision.ps1"
+
+# Fonction pour afficher le menu principal
+function Show-MainMenu {
+    Write-Host "===========================================" -ForegroundColor Yellow
+    Write-Host "      BOÎTE À OUTILS DE L'ADMINISTRATEUR" -ForegroundColor Yellow
+    Write-Host "==========================================="
+    Write-Host "1. Gérer l'Active Directory (Utilisateurs, Groupes, OU)"
+    Write-Host "2. Superviser la machine locale (Services, Événements, Processus)"
+    Write-Host "3. Quitter"
+    Write-Host "==========================================="
+}
+
+do {
+    Show-MainMenu
+    $choice = Read-Host "Que voulez-vous faire ?"
+
+    switch ($choice) {
+        1 {
+            Write-Host "Lancement de l'outil de gestion Active Directory..." -ForegroundColor Green
+            # Lance le script AD dans une nouvelle fenêtre PowerShell
+            Start-Process powershell.exe -ArgumentList "-NoExit", "-File", $ScriptPathAD
+        }
+        2 {
+            Write-Host "Lancement de l'outil de supervision local..." -ForegroundColor Green
+            # Lance l'outil de supervision dans une nouvelle fenêtre PowerShell
+            Start-Process powershell.exe -ArgumentList "-NoExit", "-File", $ScriptPathSupervision
+        }
+        3 {
+            Write-Host "Au revoir !"
+        }
+        Default {
+            Write-Host "Option invalide !" -ForegroundColor Red
+        }
+    }
+    
+    # Petite pause pour lire les messages avant de ré-afficher le menu
+    if ($choice -ne '3') {
+        Read-Host "Appuyez sur Entrée pour revenir au menu principal..."
+        Clear-Host # Nettoie l'écran pour plus de clarté
+    }
+
+} while ($choice -ne "3")
