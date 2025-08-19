@@ -1,0 +1,149 @@
+Write-Host "==========================================="-ForegroundColor Cyan
+Write-Host "            Outil de supervision           "-ForegroundColor Cyan
+Write-Host "==========================================="-ForegroundColor Cyan
+Write-Host ""
+
+# La fonction Show-Menu centralise l'affichage du menu.
+# Si on veut modifier le menu, on ne change que la fonction, pas le code principal.
+function Show-Menu {
+    Write-Host "1. Afficher les derniers événements critiques (erreur/avertissement)"
+    Write-Host "2. Liste des processus à forte consommation mémoire (> 100 Mo)"
+    Write-Host "3. Surveillance des services critiques"
+    Write-Host "4. Quitter"
+}
+
+#-----Fonction de journalisation-----
+$LogFile = "C:\Logs\outilsupervision.log" # Définition du chemin pour le fichier de log.
+
+# Création du dossier de log s'il n'existe pas.
+if (-not (Test-Path -Path (Split-Path $LogFile -Parent))) {
+    New-Item -ItemType Directory -Path (Split-Path $LogFile -Parent) | Out-Null
+}
+
+# Fonction dédiée à l'écriture dans le fichier de log.
+# Elle ajoute la date et l'heure à chaque entrée.
+function Write-Log {
+    param(
+        [string]$Message
+    )
+    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $LogEntry = "[$Timestamp] $Message"
+    
+    # Ajoute le message à la fin du fichier de log.
+    Add-Content -Path $LogFile -Value $LogEntry
+}
+
+# Liste des services critiques à surveiller (modifiable) stockée dans une variable
+$CriticalServices = @("Spooler", "wuauserv", "Dnscache")
+
+# La boucle 'do...while' garantit que le menu s'affiche au moins une fois
+# et continue de tourner tant que l'utilisateur ne choisit pas l'option 4.
+do {
+    # Appel de la fonction pour afficher les options
+    Show-Menu
+   
+    # Read-Host attend que l'utilisateur entre une valeur et appuie sur Entrée.
+    $choice = Read-Host "Sélectionnez une option (1-4)"
+   
+    #Choix de structure switch plus pratique pour gérér les menus
+    #Dirige le script vers le bon bloc de code
+    switch ($choice) {
+
+        # --- Option 1 : Analyse des Événements ---
+        1 {
+            Write-Host "`n--- Événements systèmes critiques (System) ---" -ForegroundColor White
+            # On utilise Get-WinEvent avec FilterHashtable, c'est la méthode la plus performante.
+            # plutôt que "| where-object"
+            # Level 2 = Erreur, Level 3 = Avertissement.
+            # On ne prend que les 10 plus récents pour ne pas surcharger l'affichage.
+            Get-WinEvent -FilterHashtable @{LogName='System'; Level=2,3} -MaxEvents 10 |
+                Select-Object -Property TimeCreated, LevelDisplayName, Id, Message |
+                Format-Table -AutoSize # -AutoSize ajuste la largeur des colonnes pour une meilleure lisibilité.
+            Write-Host ""
+        }
+       
+        # --- Option 2 : Gestion des Processus Gourmands ---
+        2 {
+            Write-Host "`n--- Processus utilisant plus de 100 Mo de mémoire ---" -ForegroundColor White
+            # On récupère les processus et on les filtre par leur consommation mémoire (WorkingSet).
+            # L'unité 'MB' est comprise nativement par PowerShell.
+            $highmem = Get-Process | Where-Object { $_.WorkingSet -gt 100MB }
+
+            # On vérifie si la variable $highmem contient quelque chose.
+            # C'est une sécurité pour ne pas tenter d'afficher un tableau vide.
+            if ($highmem) {
+                # On formate la sortie pour la rendre plus claire.
+                # La colonne 'RAM(MB)' est une propriété calculée :
+                #   - 'n' (Name) est le nom de la colonne.
+                #   - 'e' (Expression) est le calcul à effectuer pour chaque objet.
+                #   - "{0:N2}" formate le nombre avec 2 décimales.
+                $highmem | Select-Object -Property Id,ProcessName,@{n='RAM(MB)';e={"{0:N2}" -f ($_.WorkingSet/1MB)}} | Format-Table -AutoSize
+                # On rend le script interactif en proposant une action.
+                $toKill = Read-Host "Voulez-vous terminer un de ces processus ? (o/n)"
+                if ($toKill -eq "o") {
+                    $pid = Read-Host "Entrez l'ID du processus à fermer"
+                    
+                    # Le bloc 'Try...Catch' est une gestion d'erreur professionnelle.
+                    # Le script essai (Try) d'arrêter le processus.
+                    # S'il échoue (manque de droits, ID incorrect...), il ne plante pas mais exécute le bloc 'Catch'.
+                    Try {
+                        Stop-Process -Id $pid -Force -ErrorAction Stop # -Force tente de forcer la fermeture, -ErrorAction Stop force le passage au Catch en cas d'erreur.
+                        Write-Host "Processus $pid arrêté." -ForegroundColor Green
+                    } Catch {
+                        Write-Host "Erreur : impossible d'arrêter le processus $pid" -ForegroundColor Red
+                    }
+                }
+            } else {
+                Write-Host "Aucun processus n'utilise >100Mo." -ForegroundColor Green
+            }
+            Write-Host ""
+        }
+       
+        # --- Option 3 : Surveillance des Services ---
+        3 {
+            Write-Host "`n--- Supervision automatisée des services critiques ---" -ForegroundColor White
+            
+            # On parcourt chaque nom de service défini dans notre variable $CriticalServices.
+            foreach ($svc in $CriticalServices) {
+
+                # On tente de récupérer le service.
+                # -ErrorAction SilentlyContinue évite que le script s'arrête si un service de la liste n'existe pas sur la machine.
+                $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+                # On vérifie que le service a bien été trouvé avant de continuer.
+                if ($s) {
+                    if ($s.Status -ne "Running") {
+                        Write-Host "Le service $svc est ARRETE !" -ForegroundColor Yellow
+                        $restart = Read-Host "Voulez-vous tenter de le relancer ? (o/n)"
+                        if ($restart -eq "o") {
+                       
+                        # On utilise à nouveau Try...Catch pour relancer le service en toute sécurité.
+                            Try {
+                                Start-Service -Name $svc
+                                Write-Host " Service $svc relancé avec succès !" -ForegroundColor Green
+                            } Catch {
+                                Write-Host " Impossible de relancer $svc." -ForegroundColor Red
+                            }
+                        }
+                    } else {
+                        Write-Host "$svc : OK (en marche)" -ForegroundColor Green
+                    }
+                } else {
+                    Write-Host "Service $svc introuvable." -ForegroundColor Gray
+                }
+            }
+            Write-Host ""
+        }
+
+        # --- Option 4 : Quitter ---
+        4 {
+            Write-Host "Au revoir !"
+        }
+
+        # Le cas 'Default' est exécuté si l'utilisateur entre une valeur qui ne correspond à aucun autre choix.
+        Default {
+            Write-Host "Option invalide !" -ForegroundColor Red
+        }
+    }
+
+# La condition de fin de la boucle. Tant que $choice n'est pas égal à '4', on recommence.
+} while ($choice -ne "4")
